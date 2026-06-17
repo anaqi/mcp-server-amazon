@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { getOrdersHistory } from './orders.js'
+import { getTransactions } from './transactions.js'
 import { getCartContent, addToCart, clearCart } from './cart.js'
 import { getProductDetails, searchProducts } from './products.js'
 
@@ -47,6 +48,57 @@ server.tool('get-orders-history', 'Get orders history for a user', {}, async ({}
     ],
   }
 })
+
+server.tool(
+  'get_transactions',
+  'Get Amazon payment transactions, including in-progress and completed transactions, date, payment card, order number, merchant, status, and amount. Use maxPages to load paginated results.',
+  {
+    maxPages: z
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .optional()
+      .describe('Maximum number of transaction pages to load. 1 means only the initially visible page; higher values follow the transactions Next page control when Amazon allows it.'),
+    limit: z.number().int().min(1).max(500).optional().describe('Maximum number of transactions to return after loading pages.'),
+  },
+  async ({ maxPages, limit }) => {
+    let transactions: Awaited<ReturnType<typeof getTransactions>>
+    try {
+      transactions = await getTransactions({ maxPages, limit })
+    } catch (error: any) {
+      console.error('[ERROR][get_transactions] Error in get_transactions tool:', error)
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `An error occurred while retrieving transactions. Error: ${error.message}`,
+          },
+        ],
+      }
+    }
+
+    if (!transactions || transactions.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: 'No transactions found.',
+          },
+        ],
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(transactions, null, 2),
+        },
+      ],
+    }
+  }
+)
 
 server.tool(
   'get-cart-content',
