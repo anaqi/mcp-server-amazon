@@ -48,20 +48,21 @@ export async function getOrderDetails(orderIdOrUrl: string): Promise<AmazonOrder
           continue
         }
 
-        if (!(await hasOrderDetailsContent(page))) {
-          console.error(`[INFO][get-order-details] No order details content detected for ${url}`)
-          continue
-        }
-
         await throwIfNotLoggedIn(page)
         html = await page.content()
         sourceUrl = page.url()
 
-        if (EXPORT_LIVE_SCRAPING_FOR_MOCKS) {
-          const timestamp = getTimestamp()
-          const mockPath = `${__dirname}/../mocks/getOrderDetails_${timestamp}.html`
-          fs.writeFileSync(mockPath, html)
-          console.error(`[INFO][get-order-details] Exported order details HTML to ${mockPath}`)
+        // Always dump HTML so selectors can be diagnosed — remove after fixing
+        const timestamp = getTimestamp()
+        const dumpPath = `${__dirname}/../mocks/getOrderDetails_dump_${timestamp}.html`
+        fs.mkdirSync(`${__dirname}/../mocks`, { recursive: true })
+        fs.writeFileSync(dumpPath, html)
+        console.error(`[INFO][get-order-details] Dumped HTML to ${dumpPath}`)
+
+        if (!(await hasOrderDetailsContent(page))) {
+          console.error(`[INFO][get-order-details] No order details content detected for ${url} — HTML dumped for diagnosis`)
+          html = ''
+          continue
         }
 
         break
