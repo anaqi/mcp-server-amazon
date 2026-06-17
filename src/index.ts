@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { getOrdersHistory } from './orders.js'
+import { getOrderDetails } from './orderDetails.js'
 import { getTransactions } from './transactions.js'
 import { getCartContent, addToCart, clearCart } from './cart.js'
 import { getProductDetails, searchProducts } from './products.js'
@@ -283,6 +284,42 @@ server.tool(
           {
             type: 'text',
             text: `No products found for search term "${searchTerm}".`,
+          },
+        ],
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(result, null, 2),
+        },
+      ],
+    }
+  }
+)
+
+server.tool(
+  'get_order_details',
+  'Get detailed information about a specific Amazon order by order ID or order URL, including items, product titles, images, ASINs, and order status.',
+  {
+    orderIdOrUrl: z
+      .string()
+      .min(1, { message: 'Order ID or URL cannot be empty.' })
+      .describe('The Amazon order ID (e.g. 702-1234567-1234567) or a full order details URL containing orderID=...'),
+  },
+  async ({ orderIdOrUrl }) => {
+    let result: Awaited<ReturnType<typeof getOrderDetails>>
+    try {
+      result = await getOrderDetails(orderIdOrUrl)
+    } catch (error: any) {
+      console.error('[ERROR][get_order_details] Error in get_order_details tool:', error)
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `An error occurred while retrieving order details. Error: ${error.message}`,
           },
         ],
       }
