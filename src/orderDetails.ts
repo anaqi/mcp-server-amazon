@@ -10,7 +10,6 @@ export interface AmazonOrderItem {
   image?: string
   productUrl?: string
   asin?: string | null
-  viewItemUrl?: string
 }
 
 export interface AmazonOrderDetails {
@@ -48,21 +47,20 @@ export async function getOrderDetails(orderIdOrUrl: string): Promise<AmazonOrder
           continue
         }
 
+        if (!(await hasOrderDetailsContent(page))) {
+          console.error(`[INFO][get-order-details] No order details content detected for ${url}`)
+          continue
+        }
+
         await throwIfNotLoggedIn(page)
         html = await page.content()
         sourceUrl = page.url()
 
-        // Always dump HTML so selectors can be diagnosed — remove after fixing
-        const timestamp = getTimestamp()
-        const dumpPath = `${__dirname}/../mocks/getOrderDetails_dump_${timestamp}.html`
-        fs.mkdirSync(`${__dirname}/../mocks`, { recursive: true })
-        fs.writeFileSync(dumpPath, html)
-        console.error(`[INFO][get-order-details] Dumped HTML to ${dumpPath}`)
-
-        if (!(await hasOrderDetailsContent(page))) {
-          console.error(`[INFO][get-order-details] No order details content detected for ${url} — HTML dumped for diagnosis`)
-          html = ''
-          continue
+        if (EXPORT_LIVE_SCRAPING_FOR_MOCKS) {
+          const timestamp = getTimestamp()
+          const mockPath = `${__dirname}/../mocks/getOrderDetails_${timestamp}.html`
+          fs.writeFileSync(mockPath, html)
+          console.error(`[INFO][get-order-details] Exported order details HTML to ${mockPath}`)
         }
 
         break
@@ -79,13 +77,13 @@ export async function getOrderDetails(orderIdOrUrl: string): Promise<AmazonOrder
   }
 
   const $ = cheerio.load(html)
-  const orderDate = normalizeText($('.delivery-box__primary-text').first().text()) || undefined
-  const status = normalizeText($('.delivery-box__primary-text').first().text()) || undefined
+  const orderDate = normalizeText($('[data-component="orderDate"] span').first().text()) || undefined
+  const status = normalizeText($('h4.od-status-message .a-text-bold').first().text()) || undefined
   const items = extractOrderDetailItems($)
 
   return {
     orderId,
-    orderUrl: `https://www.${domain}/your-orders/order-details?orderID=${orderId}`,
+    orderUrl: sourceUrl || `https://www.${domain}/your-orders/order-details?orderID=${orderId}`,
     orderDate,
     status,
     items,
@@ -116,32 +114,24 @@ function extractOrderDetailItems($: cheerio.CheerioAPI): AmazonOrderItem[] {
   const items: AmazonOrderItem[] = []
   const seen = new Set<string>()
 
-  $('.item-box').each((_index, element) => {
-    const $item = $(element)
-    const titleAnchor = $item.find('.yohtmlc-product-title a').first()
-    const imageAnchor = $item.find('.product-image a').first()
-    const title = normalizeText(titleAnchor.text()) || normalizeText($item.find('img').first().attr('alt') || '')
+  $('[data-component="purchasedItems"]').each((_i, container) => {
+    const $c = $(container)
+    const titleAnchor = $c.find('[data-component="itemTitle"] a').first()
+    const imageEl = $c.find('[data-component="itemImage"] img').first()
+    const imageAnchor = $c.find('[data-component="itemImage"] a').first()
+
+    const title = normalizeText(titleAnchor.text()) || normalizeText(imageEl.attr('alt') || '')
     const productUrl = titleAnchor.attr('href') || imageAnchor.attr('href') || undefined
-    const image =
-      $item.find('.product-image img').attr('src') ||
-      $item.find('.product-image img').attr('data-a-hires') ||
-      undefined
-    const viewItemUrl = $item.find('a[href*="/your-orders/pop"]').attr('href') || undefined
-    const asin = extractAsin(productUrl) || extractAsin(viewItemUrl)
+    const image = imageEl.attr('data-a-hires') || imageEl.attr('src') || undefined
+    const asin = extractAsin(productUrl)
 
-    if (!title && !productUrl && !viewItemUrl) return
+    if (!title && !productUrl) return
 
-    const key = [title, productUrl || '', viewItemUrl || '', asin || ''].join('|')
+    const key = [title, productUrl || '', asin || ''].join('|')
     if (seen.has(key)) return
     seen.add(key)
 
-    items.push({
-      title,
-      image,
-      productUrl,
-      asin,
-      viewItemUrl,
-    })
+    items.push({ title, image, productUrl, asin })
   })
 
   return items
@@ -166,9 +156,5 @@ async function isSignInPage(page: Awaited<ReturnType<typeof createBrowserAndPage
 }
 
 async function hasOrderDetailsContent(page: Awaited<ReturnType<typeof createBrowserAndPage>>['page']): Promise<boolean> {
-  return (
-    (await page.$('.item-box')) !== null ||
-    (await page.$('.order-card')) !== null ||
-    (await page.$('.your-orders-content-container')) !== null
-  )
+  return (await page.$('[data-component="purchasedItems"]')) !== null
 }
