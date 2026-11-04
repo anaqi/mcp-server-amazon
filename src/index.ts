@@ -302,7 +302,7 @@ server.tool(
 
 server.tool(
   'get_order_details',
-  'Get detailed information about a specific Amazon order by order ID or order URL, including items, product titles, images, ASINs, and order status.',
+  'Get detailed information about a specific Amazon order by order ID or order URL, including items, product titles, images, ASINs, order status, and shipment tracking (carrier, tracking number, delivery estimate, delay notes, and the full tracking event history) for each shipped package.',
   {
     orderIdOrUrl: z
       .string()

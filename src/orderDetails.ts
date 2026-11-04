@@ -12,12 +12,35 @@ export interface AmazonOrderItem {
   asin?: string | null
 }
 
+export interface AmazonTrackingEvent {
+  date: string
+  time: string | null
+  message: string
+  location: string | null
+}
+
+export interface AmazonShipment {
+  carrier: string | null
+  trackingId: string | null
+  /** Delivery promise, e.g. "Arriving Saturday" or "Estimated to arrive by 4 November" */
+  status: string | null
+  /** Progress milestone, e.g. "Shipped" (only on some tracker layouts) */
+  stage: string | null
+  /** Amazon's delay / exception message, when present */
+  note: string | null
+  trackUrl: string
+  /** Newest first, as Amazon displays them. Dates have no year; times are local. */
+  events: AmazonTrackingEvent[]
+}
+
 export interface AmazonOrderDetails {
   orderId: string
   orderUrl: string
   orderDate?: string
   status?: string
   items: AmazonOrderItem[]
+  /** One entry per package that has a "Track package" link; empty if not shipped yet. */
+  shipments: AmazonShipment[]
 }
 
 export async function getOrderDetails(orderIdOrUrl: string): Promise<AmazonOrderDetails> {
@@ -26,6 +49,7 @@ export async function getOrderDetails(orderIdOrUrl: string): Promise<AmazonOrder
 
   let html = ''
   let sourceUrl = ''
+  let shipments: AmazonShipment[] = []
 
   if (USE_MOCKS) {
     console.error('[INFO][get-order-details] Fetching order details from mocks')
@@ -63,6 +87,9 @@ export async function getOrderDetails(orderIdOrUrl: string): Promise<AmazonOrder
           console.error(`[INFO][get-order-details] Exported order details HTML to ${mockPath}`)
         }
 
+        // Tracker pages are only reachable from a live, logged-in session, so fetch them
+        // before the browser closes.
+        shipments = await fetchShipments(page, extractTrackUrls(cheerio.load(html), page.url()))
         break
       }
     } finally {
@@ -78,7 +105,10 @@ export async function getOrderDetails(orderIdOrUrl: string): Promise<AmazonOrder
 
   const $ = cheerio.load(html)
   const orderDate = normalizeText($('[data-component="orderDate"] span').first().text()) || undefined
-  const status = normalizeText($('h4.od-status-message .a-text-bold').first().text()) || undefined
+  const status =
+    normalizeText($('[data-component="shipmentStatus"]').first().text()) ||
+    normalizeText($('h4.od-status-message').first().text()) ||
+    undefined
   const items = extractOrderDetailItems($)
 
   return {
@@ -87,6 +117,93 @@ export async function getOrderDetails(orderIdOrUrl: string): Promise<AmazonOrder
     orderDate,
     status,
     items,
+    shipments,
+  }
+}
+
+type Page = Awaited<ReturnType<typeof createBrowserAndPage>>['page']
+
+/** "Track package" links on an order details page (one per package). */
+export function extractTrackUrls($: cheerio.CheerioAPI, baseUrl: string): string[] {
+  const urls: string[] = []
+  $('a[href*="progress-tracker/package"]').each((_i, a) => {
+    const href = ($(a).attr('href') || '').replace(/&amp;/g, '&')
+    if (!href) return
+    const abs = new URL(href, baseUrl).toString()
+    if (!urls.includes(abs)) urls.push(abs)
+  })
+  return urls
+}
+
+async function fetchShipments(page: Page, trackUrls: string[]): Promise<AmazonShipment[]> {
+  const shipments: AmazonShipment[] = []
+  for (const trackUrl of trackUrls) {
+    try {
+      console.error(`[INFO][get-order-details] Fetching tracking from ${trackUrl}`)
+      await page.goto(trackUrl, { waitUntil: 'networkidle2', timeout: 45000 })
+      if (await isSignInPage(page)) {
+        console.error('[INFO][get-order-details] Tracker redirected to sign in')
+        continue
+      }
+      const trackerHtml = await page.content()
+      if (EXPORT_LIVE_SCRAPING_FOR_MOCKS) {
+        const mockPath = `${__dirname}/../mocks/getTracking_${getTimestamp()}.html`
+        fs.writeFileSync(mockPath, trackerHtml)
+        console.error(`[INFO][get-order-details] Exported tracker HTML to ${mockPath}`)
+      }
+      shipments.push(parseTrackingPage(trackerHtml, trackUrl))
+    } catch (error: any) {
+      // Tracking is best-effort: never fail the whole order lookup because of it.
+      console.error(`[ERROR][get-order-details] Failed to fetch tracking ${trackUrl}: ${error.message}`)
+    }
+  }
+  return shipments
+}
+
+/**
+ * Parse an Amazon progress-tracker page. Amazon serves two different top-level layouts
+ * (Amazon Logistics vs third-party carrier), but both embed the same "See all updates"
+ * popover (#tracking-events-container), which is the source for carrier, id and history.
+ */
+export function parseTrackingPage(html: string, trackUrl: string): AmazonShipment {
+  const $ = cheerio.load(html)
+  const text = (sel: string) => normalizeText($(sel).first().text())
+  const root = $('#tracking-events-container')
+
+  const carrier =
+    normalizeText(root.find('.tracking-event-carrier-header').first().text()) ||
+    text('#carrierRelatedInfo-container h1') ||
+    text('.pt-delivery-card-wrapper h3')
+  const trackingId =
+    normalizeText(root.find('.tracking-event-trackingId-text').first().text()) ||
+    text('.carrierRelatedInfo-trackingId-text') ||
+    text('.pt-delivery-card-trackingId')
+
+  const events: AmazonTrackingEvent[] = []
+  root.find('.tracking-event-date-header').each((_i, header) => {
+    const date = normalizeText($(header).find('.tracking-event-date').text())
+    $(header)
+      .parent()
+      .find('.tracking-event-time-left')
+      .each((_j, left) => {
+        const right = $(left).next('.tracking-event-time-right')
+        events.push({
+          date,
+          time: normalizeText($(left).find('.tracking-event-time').text()) || null,
+          message: normalizeText(right.find('.tracking-event-message').text()),
+          location: normalizeText(right.find('.tracking-event-location').text()) || null,
+        })
+      })
+  })
+
+  return {
+    carrier: carrier.replace(/^Delivery by\s*/i, '') || null,
+    trackingId: trackingId.replace(/^Tracking ID:\s*/i, '') || null,
+    status: text('#primaryStatus') || text('.pt-promise-main-slot') || null,
+    stage: text('.pt-status-main-status') || null,
+    note: text('#lexicalExceptionMessage-container h3') || null,
+    trackUrl: trackUrl.replace(/&(vt|ref_|noPtRedirect)=[^&]*/g, ''),
+    events,
   }
 }
 
