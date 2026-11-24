@@ -23,8 +23,12 @@ interface CartItem {
 interface CartContent {
   isEmpty: boolean
   items: CartItem[]
+  /** Amazon's subtotal for the ticked items only, or "No items selected" */
   subtotal?: string
+  /** Number of item lines in the cart, ticked or not */
   totalItems?: number
+  /** Number of item lines that are ticked (counted in the subtotal) */
+  selectedItems?: number
 }
 
 // ##################################
@@ -125,20 +129,19 @@ function extractCartPageData($: cheerio.CheerioAPI): CartContent {
     }
   })
 
-  // Extract subtotal information
-  const subtotal =
-    $cartContainer.find('#sc-subtotal-amount-activecart .sc-price').text().trim() ||
-    $cartContainer.find('.sc-subtotal .sc-price').text().trim()
-
-  const totalItemsText = $cartContainer.find('#sc-subtotal-label-activecart').text().trim()
-  const totalItemsMatch = totalItemsText.match(/\((\d+)\s+item/)
-  const totalItems = totalItemsMatch ? parseInt(totalItemsMatch[1]) : items.length
+  // Extract subtotal information. The amount lives in the buy box, outside #sc-active-cart
+  // ("activecart" is the id of the older bottom-of-list layout). It only covers ticked items,
+  // and with nothing ticked Amazon shows no amount at all.
+  const selectedItems = items.filter(item => item.isSelected).length
+  const subtotalAmount = $('#sc-subtotal-amount-buybox .sc-price, #sc-subtotal-amount-activecart .sc-price').first().text().trim()
+  const subtotal = subtotalAmount || (selectedItems === 0 ? 'No items selected' : undefined)
 
   return {
     isEmpty: false,
     items,
     subtotal,
-    totalItems,
+    totalItems: items.length,
+    selectedItems,
   }
 }
 
